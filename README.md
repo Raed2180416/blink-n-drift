@@ -1,6 +1,6 @@
 # Blink & Drift
 
-A fun, camera-powered lane-switching game where **you** steer with your finger, blink to ramp up difficulty, pinch to start/pause/restart, and collect items to manage your spawn rate and lives.
+A pretty basic fun, camera-powered lane-switching game where **you** steer with your finger, blink to ramp up difficulty, pinch to start/pause/restart, and collect items to manage your spawn rate and lives.
 
 ---
 
