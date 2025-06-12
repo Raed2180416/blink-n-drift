@@ -6,9 +6,9 @@ A pretty basic fun, camera-powered lane-switching game where **you** steer with 
 
 ## 🚀 Features
 
-- **Finger-point lane control**: move your index finger left/right to switch between 3 lanes  
+- **Finger-point lane control**: move your palm left/right to switch between 3 lanes  
 - **Blink to increase difficulty**: each blink permanently speeds up obstacle spawns  
-- **Blue‐circle “freeze” collectibles**: slow down spawns when caught  
+- **Collect Coins**: Who doesnt like some good old money  
 - **Hearts**: regain one life when collected after you lose one  
 - **Lives system**: you start with 3 lives; crash into obstacles to lose them  
 - **Score & Highscore**: dodge obstacles to increase your score; your best run is saved  
