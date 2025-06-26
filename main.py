@@ -2,27 +2,21 @@ import os
 os.environ["TF_CPP_MIN_LOG_LEVEL"] = "3"
 import absl.logging
 absl.logging.set_verbosity(absl.logging.ERROR)
-
 import cv2
 import mediapipe as mp
 import time
 import math
-
 from game_logic1 import Game
-
 # ── Config ────────────────────────────────────────────────────────
-EAR_THRESH    = 2.267     # When EAR goes ABOVE this, it's a blink
-EAR_RELEASE   = 2.317   # When EAR goes BELOW this, eyes are open
-BLINK_FRAMES  = 2    # Increased to prevent false positives
+EAR_THRESH    = 2.280     # Keep this
+EAR_RELEASE   = 2.260     # Keep this
+BLINK_FRAMES  = 2.4         # Change from 2.35 to integer 2
 LEFT_EYE_IDS  = [33, 246, 161, 160, 159, 158]
 RIGHT_EYE_IDS = [362, 398, 382, 381, 380, 373]
-
 LANE_COUNT    = 3
 SWITCH_DELAY  = 0.2
-
 PINCH_THRESH  = 0.05
 PINCH_RELEASE = 0.10
-
 def setup_camera():
     cap = cv2.VideoCapture(0)
     if not cap.isOpened():
@@ -31,7 +25,6 @@ def setup_camera():
     cap.set(cv2.CAP_PROP_FRAME_WIDTH,  1280)
     cap.set(cv2.CAP_PROP_FRAME_HEIGHT, 720)
     return cap
-
 def init_mediapipe():
     hands = mp.solutions.hands.Hands(
         max_num_hands=1,
@@ -62,7 +55,6 @@ def process_blinks(rgb, fmesh, state, cnt):
         left_ear = compute_ear(lm, LEFT_EYE_IDS)
         right_ear = compute_ear(lm, RIGHT_EYE_IDS)
         ear = (left_ear + right_ear) / 2.0
-        
         # Debug print with clearer state indication
         print(f"EAR: {ear:.3f} | State: {state} | Counter: {cnt} {'[BLINK CHARGING]' if cnt > 0 else ''}", end='\r')
         
@@ -214,7 +206,6 @@ def run_game_loop(cap, fw, fh, hands, fmesh):
     blink_ctr = 0
     pinch_st = "OPEN"
     game = Game(LANE_COUNT)
-
     while True:
         ret, frame = cap.read()
         if not ret:
@@ -222,33 +213,26 @@ def run_game_loop(cap, fw, fh, hands, fmesh):
             break
         frame = cv2.flip(frame, 1)
         rgb = cv2.cvtColor(frame, cv2.COLOR_BGR2RGB)
-
         # Blink detection
         blink_st, blink_ctr, blink_event_flag = process_blinks(rgb, fmesh, blink_st, blink_ctr)
-        
         # Pinch detection and lane switching
         pinch_st, pinch_event_flag, new_lane, last_sw = detect_pinch_and_lane(
             rgb, hands, pinch_st, lane, last_sw)
         lane = new_lane # Update lane based on detection
-
         # --- Game State Machine ---
         if current_game_state == "intro":
             current_game_state = handle_intro_state(frame, game, pinch_event_flag, fw, fh)
         
         elif current_game_state == "playing":
             current_game_state = handle_playing_state(frame, game, pinch_event_flag, blink_event_flag, lane, fw, fh)
-            # Reset blink_event_flag after handling, if it's a one-shot event per detection
-            # blink_event_flag = False 
-            
+        
         elif current_game_state == "paused":
             current_game_state = handle_paused_state(frame, pinch_event_flag, fw, fh)
             
         elif current_game_state == "gameover":
             current_game_state = handle_gameover_state(frame, game, pinch_event_flag, fw, fh)
-
         if not handle_display_and_input():
             break
-    
     # Release resources if loop breaks
     hands.close()
     fmesh.close()
@@ -272,12 +256,7 @@ def main():
     try:
         run_game_loop(cap, fw, fh, hands, fmesh)
     finally:
-        # Ensure resources are released even if an error occurs in run_game_loop
-        # Note: hands and fmesh are closed within run_game_loop if it exits normally.
-        # If run_game_loop might error out before its own cleanup, add it here too.
-        # However, mediapipe recommends closing them when done.
-        # If they are already closed, closing again might error or do nothing.
-        # For simplicity, assuming run_game_loop handles its own cleanup on normal exit.
+    
         cap.release()
         cv2.destroyAllWindows()
 
