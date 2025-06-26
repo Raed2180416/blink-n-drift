@@ -4,42 +4,39 @@ import random
 import cv2
 import numpy as np
 
-Game_speed = 450
+# --- Game Difficulty ---
+INITIAL_OBSTACLE_SPEED = 350
+SPEED_INCREMENT = 20        # Speed increase per blink
+SPAWN_INTERVAL = 2.0        # Initial time between obstacle spawns
 
-INITIAL_OBSTACLE_SPEED = 450
-MAX_OBSTACLE_SPEED = 600
-SPEED_INCREMENT = 20
-SPAWN_INTERVAL = 2.0
-
+# --- Collectibles & Player Stats ---
 COIN_INTERVAL = 3.0
 HEART_INTERVAL = 12.0
 MAX_LIVES = 3
 
+# --- Object Visual Scaling ---
 CAR_SCALE = 0.28
 OBS_SCALE = 0.28
 COIN_SCALE = 0.15
 HEART_SCALE = 0.23
 
-
+# --- Layout & Spawning ---
 COLOR_LANE = (50, 50, 50)
-
-
-
-
-
-MIN_VERTICAL_GAP = 300
+MIN_VERTICAL_GAP = 400      # Prevents items from overlapping
 SPAWN_Y = -50
+OBSTACLE_SPAWN_LOOKAHEAD_SECONDS = 0.45 # Balanced value: not too safe, not too chaotic
 
+# --- Collision Forgiveness ---
+# Shrinks hitboxes. 0.2 means hitbox is 20% smaller than the sprite.
+CAR_V_FORGIVENESS = 0.35
+OBS_V_FORGIVENESS = 0.35
+CAR_H_FORGIVENESS = 0.25
+OBS_H_FORGIVENESS = 0.25
 
-COLLISION_FORGIVENESS = 0.50
-EXTRA_FORGIVENESS = 0.70
-TWO_THIRDS = 0.6
+# --- Game Modes ---
+PATTERN_DURATION = 30
+BONUS_DURATION = 10
 
-
-OBSTACLE_SPAWN_LOOKAHEAD_SECONDS = 0.75
-
-PATTERN_DURATION = 10
-BONUS_DURATION = 35
 
 OBSTACLE_PATTERNS = {
     "zigzag": [
@@ -145,12 +142,12 @@ def draw_sprite(sprite, rect, overlay):
         return
 
     if visible_portion.shape[2] == 4: 
-        alpha_channel = visible_portion[:, :, 3].astype(float) / 255.0
-        for c in range(3):
-            overlay[dst_y1_overlay:dst_y2_overlay, dst_x1_overlay:dst_x2_overlay, c] = (
-                alpha_channel * visible_portion[:, :, c] +
-                (1 - alpha_channel) * overlay[dst_y1_overlay:dst_y2_overlay, dst_x1_overlay:dst_x2_overlay, c]
-            ).astype(overlay.dtype)
+        # --- OPTIMIZED: High-speed alpha blending with NumPy ---
+        alpha_mask = visible_portion[:, :, 3, np.newaxis] / 255.0
+        target_region = overlay[dst_y1_overlay:dst_y2_overlay, dst_x1_overlay:dst_x2_overlay]
+        
+        blended = (visible_portion[:, :, :3] * alpha_mask + target_region * (1 - alpha_mask)).astype(overlay.dtype)
+        overlay[dst_y1_overlay:dst_y2_overlay, dst_x1_overlay:dst_x2_overlay] = blended
     else: 
         overlay[dst_y1_overlay:dst_y2_overlay, dst_x1_overlay:dst_x2_overlay] = visible_portion
 
@@ -189,9 +186,8 @@ class Obstacle:
         self.sprite = sprite
         self.rect = (0, 0, 0, 0)
 
-    def update(self, dt, boundaries):
-        global Game_speed
-        self.y += Game_speed * dt
+    def update(self, dt, boundaries, speed): # ADDED speed parameter
+        self.y += speed * dt # CHANGED to use passed-in speed
         left, right = boundaries[self.lane], boundaries[self.lane+1]
         lane_w = right - left
         
@@ -228,9 +224,8 @@ class CoinItem:
         self.rect = (0, 0, 0, 0)
         self.sprite = sprite
 
-    def update(self, dt, boundaries):
-        global Game_speed
-        self.y += Game_speed * dt
+    def update(self, dt, boundaries, speed): # ADDED speed parameter
+        self.y += speed * dt # CHANGED to use passed-in speed
         left, right = boundaries[self.lane], boundaries[self.lane + 1]
         r = int((right - left) * COIN_SCALE)
         cx = (left + right) // 2
@@ -252,9 +247,8 @@ class HeartItem:
         self.rect = (0, 0, 0, 0)
         self.sprite = sprite
 
-    def update(self, dt, boundaries):
-        global Game_speed
-        self.y += Game_speed * dt
+    def update(self, dt, boundaries, speed): # ADDED speed parameter
+        self.y += speed * dt # CHANGED to use passed-in speed
         left, right = boundaries[self.lane], boundaries[self.lane + 1]
         size = int((right - left) * HEART_SCALE)
         radius = size // 2
@@ -271,9 +265,8 @@ class ExplosionEffect:
         self.rect = tuple(initial_rect)
         self.sprite = sprite
 
-    def update(self, dt):
-        global Game_speed
-        dy = Game_speed * dt
+    def update(self, dt, speed): # ADDED speed parameter
+        dy = speed * dt # CHANGED to use passed-in speed
         self.rect = (self.rect[0], self.rect[1] + dy, self.rect[2], self.rect[3] + dy)
 
     def draw(self, overlay):
@@ -305,6 +298,8 @@ class Game:
         self.boundaries = [0]*(lane_count+1)
         self.game_over = False
 
+        self.debug_mode = True # SET TO TRUE TO SEE HITBOXES
+
         self.pattern_active = False
         self.pattern_name = None
         self.pattern_step = 0
@@ -319,9 +314,16 @@ class Game:
         imgdir = os.path.join(base, "images")
 
         self.car.sprite = cv2.imread(os.path.join(imgdir, "main.png"), cv2.IMREAD_UNCHANGED)
-        self.obs_sprites = [cv2.imread(os.path.join(imgdir, fn), cv2.IMREAD_UNCHANGED)
+        
+        # --- NEW: Separate car and truck sprites for rarity ---
+        all_obs_sprites = [cv2.imread(os.path.join(imgdir, fn), cv2.IMREAD_UNCHANGED)
                            for fn in ("car-truck2.png","car-truck3.png","car-truck4.png","car-truck5.png")]
-        self.obs_sprites = [img for img in self.obs_sprites if img is not None]
+        all_obs_sprites = [img for img in all_obs_sprites if img is not None]
+        
+        self.car_sprites = all_obs_sprites[:2]  # First 2 are cars
+        self.truck_sprites = all_obs_sprites[2:] # Last 2 are trucks
+        self.last_spawn_was_truck = False
+        
         self.heart_sprite = cv2.imread(os.path.join(imgdir, "heart.png"), cv2.IMREAD_UNCHANGED)
         self.coin_sprite = cv2.imread(os.path.join(imgdir, "coin.png"), cv2.IMREAD_UNCHANGED)
 
@@ -351,18 +353,14 @@ class Game:
         self.scroll_speed = 4.0
 
         self.obstacle_speed = INITIAL_OBSTACLE_SPEED
-        global Game_speed
-        Game_speed = self.obstacle_speed
+        # REMOVED: No longer need to set global variable
 
     def on_blink(self):
         old_interval = self.spawn_interval
         old_speed = self.obstacle_speed
         
         self.spawn_interval = max(0.5, self.spawn_interval * 0.9)
-        self.obstacle_speed = min(MAX_OBSTACLE_SPEED, self.obstacle_speed + SPEED_INCREMENT)
-        
-        global Game_speed
-        Game_speed = self.obstacle_speed
+        self.obstacle_speed += SPEED_INCREMENT # REMOVED: Speed cap is gone.
         
         print(f">>> Blink! Interval: {old_interval:.2f}s→{self.spawn_interval:.2f}s, Speed: {old_speed}→{self.obstacle_speed}")
 
@@ -376,21 +374,21 @@ class Game:
         if self.pattern_active or self.bonus_active:
             return False
             
+        # Check for bonus mode at multiples of 70
         if self.score > 0 and self.score % 70 == 0:
             return "bonus"
             
+        # Check for pattern mode (25-35 range in each 50-point cycle, starting from score 25)
         if self.score >= 25:
-            range_start = None
-            if 25 <= self.score <= 35:
-                range_start = 25
-            elif self.score >= 50:
-                adjusted_score = self.score - 25
-                cycle_position = adjusted_score % 50
-                if 25 <= cycle_position <= 35:
-                    range_start = self.score - (cycle_position - 25)
+            # Calculate position within the 70-point cycle
+            cycle_position = (self.score - 25) % 70
             
-            if range_start and self.score == range_start:
-                return "pattern"
+            # Pattern mode occurs at positions 0-10 within each 70-point cycle
+            # (which corresponds to scores 25-35, 95-105, 165-175, etc.)
+            if 0 <= cycle_position <= 10:
+                # Only start pattern at the beginning of the range
+                if cycle_position == 0:
+                    return "pattern"
                 
         return False
 
@@ -446,8 +444,9 @@ class Game:
             current_pattern = pattern[self.pattern_step % len(pattern)]
             
             for lane_idx, should_spawn in enumerate(current_pattern):
-                if should_spawn and lane_idx < self.lane_count:
-                    sprite = random.choice(self.obs_sprites)
+                if should_spawn and lane_idx < self.lane_count and self.car_sprites:
+                    # Patterns will only spawn regular cars for consistency
+                    sprite = random.choice(self.car_sprites)
                     new_obstacle = Obstacle(self.lane_count, sprite)
                     new_obstacle.lane = lane_idx
                     new_obstacle.y = SPAWN_Y - (len([l for l in current_pattern[:lane_idx] if l]) * 80)
@@ -466,6 +465,7 @@ class Game:
             print(f">>> Bonus stretch ended at score {self.score}")
             return
             
+        # Continue spawning bonus collectibles during bonus time
         if now - self.t_last_coin_spawn > 2.0:
             self._spawn_bonus_collectibles()
             self.t_last_coin_spawn = now
@@ -488,7 +488,7 @@ class Game:
             self._create_and_spawn_obstacle(chosen_lane, now)
 
     def _can_spawn_obstacle(self, now):
-        if not self.obs_sprites or now - self.t_last_obs_spawn < self.spawn_interval:
+        if not (self.car_sprites or self.truck_sprites) or now - self.t_last_obs_spawn < self.spawn_interval:
             return False
         
         return (self.boundaries and len(self.boundaries) > 1 and self.boundaries[1] > self.boundaries[0])
@@ -557,31 +557,33 @@ class Game:
         return False
 
     def _choose_spawn_lane(self, candidate_lanes):
-        if candidate_lanes:
-            return self._choose_from_candidates(candidate_lanes)
-        else:
-            return self._choose_fallback_lane()
+        if not candidate_lanes:
+            return -1 # CRITICAL FIX: If no safe lane is found, do not spawn.
 
-    def _choose_from_candidates(self, candidate_lanes):
+        # The rest of the logic is fine, it picks the best from the safe candidates.
         candidate_lanes.sort(key=lambda x: x[1], reverse=True)
         best_score = candidate_lanes[0][1]
         top_tier_lanes = [lane_idx for lane_idx, score in candidate_lanes if score == best_score]
         return random.choice(top_tier_lanes)
 
-    def _choose_fallback_lane(self):
-        safe_basic_lanes = []
-        for l_idx in range(self.lane_count):
-            if self._is_lane_basically_safe(l_idx):
-                safe_basic_lanes.append(l_idx)
-        
-        return random.choice(safe_basic_lanes) if safe_basic_lanes else -1
-
     def _create_and_spawn_obstacle(self, chosen_lane, now):
-        sprite = random.choice(self.obs_sprites)
-        new_obstacle = Obstacle(self.lane_count, sprite)
-        new_obstacle.lane = chosen_lane
-        self.obstacles.append(new_obstacle)
-        self.t_last_obs_spawn = now
+        sprite = None
+        # --- NEW: Logic for spawning rare trucks ---
+        # Trucks have a ~20% chance to spawn, but not if the last obstacle was also a truck.
+        is_truck_spawn = random.random() < 0.20 and not self.last_spawn_was_truck
+
+        if is_truck_spawn and self.truck_sprites:
+            sprite = random.choice(self.truck_sprites)
+            self.last_spawn_was_truck = True
+        elif self.car_sprites:
+            sprite = random.choice(self.car_sprites)
+            self.last_spawn_was_truck = False
+
+        if sprite is not None:
+            new_obstacle = Obstacle(self.lane_count, sprite)
+            new_obstacle.lane = chosen_lane
+            self.obstacles.append(new_obstacle)
+            self.t_last_obs_spawn = now
     
     def _spawn_coin(self, now):
         if self.coin_sprite is None or now - self.t_last_coin_spawn < self.coin_interval:
@@ -596,6 +598,10 @@ class Game:
     # _spawn_freeze method removed
 
     def _spawn_heart(self, now):
+        # Only attempt to spawn a heart if lives are not full.
+        if self.lives >= MAX_LIVES:
+            return
+            
         if self.heart_sprite is None or now - self.t_last_heart_spawn < self.heart_interval:
             return
         lane = self._get_safe_lane(SPAWN_Y)
@@ -623,25 +629,9 @@ class Game:
         self._spawn_all_items()
         self.car.update(dt, self.boundaries, fh)
 
-        self._update_obstacles(fh)
+        # REMOVED: self._update_obstacles(fh) was redundant and caused a speed bug.
         self._update_road_animation()
         self._process_game_elements(dt, fh)
-
-    def _update_obstacles(self, fh):
-        new_obstacles = []
-        for obs in self.obstacles:
-            if isinstance(obs, tuple):
-                img, x, y, obs_lane = obs
-                new_y = y + (self.obstacle_speed * (1/30))
-                if new_y < fh:
-                    new_obstacles.append((img, x, new_y, obs_lane))
-            else:
-                try:
-                    obs.y += self.obstacle_speed * (1/30)
-                    new_obstacles.append(obs)
-                except AttributeError:
-                    pass
-        self.obstacles = new_obstacles
 
     def _update_road_animation(self):
         if hasattr(self, 'dash_len') and hasattr(self, 'dash_gap'):
@@ -652,14 +642,13 @@ class Game:
     def _process_explosion_effects(self, dt, fh):
         for i in range(len(self.explosion_effects) - 1, -1, -1):
             effect = self.explosion_effects[i]
-            effect.update(dt)
+            effect.update(dt, self.obstacle_speed) # PASS speed
             if effect.rect[1] > fh:
                 self.explosion_effects.pop(i)
 
     def _process_game_elements(self, dt, fh):
         self._process_obstacles(dt, fh)
         self._process_coins(dt, fh)
-        # self._process_freezes(dt, fh) # Removed
         self._process_hearts(dt, fh)
         self._process_explosion_effects(dt, fh)
         self._check_game_over()
@@ -693,7 +682,7 @@ class Game:
 
     def _process_obstacles(self, dt, fh):
         for obs in self.obstacles[:]:
-            obs.update(dt, self.boundaries)
+            obs.update(dt, self.boundaries, self.obstacle_speed) # PASS speed
             if obs.rect[1] > fh:
                 self._handle_obstacle_scored(obs)
             elif Game._intersect(self.car.rect, obs.rect, forgive_tail=True):
@@ -724,7 +713,7 @@ class Game:
 
     def _process_coins(self, dt, fh):
         for coin in self.coins[:]:
-            coin.update(dt, self.boundaries)
+            coin.update(dt, self.boundaries, self.obstacle_speed) # PASS speed
             if coin.rect[1] > fh:
                 self.coins.remove(coin)
             elif Game._intersect(coin.rect, self.car.rect, forgive_tail=False):
@@ -735,7 +724,7 @@ class Game:
 
     def _process_hearts(self, dt, fh):
         for ht in self.hearts[:]:
-            ht.update(dt, self.boundaries)
+            ht.update(dt, self.boundaries, self.obstacle_speed) # PASS speed
             if ht.rect[1] > fh:
                 self.hearts.remove(ht)
             elif Game._intersect(ht.rect, self.car.rect, forgive_tail=False):
@@ -746,6 +735,35 @@ class Game:
     def _check_game_over(self):
         if self.lives <= 0 and not self.game_over:
             self.game_over = True
+
+    def _draw_debug_hitboxes(self, frame):
+        """Draws visual and SYMMETRICAL core hitboxes for debugging."""
+        # --- Car Hitboxes ---
+        ax1, ay1, ax2, ay2 = map(int, self.car.rect)
+        cv2.rectangle(frame, (ax1, ay1), (ax2, ay2), (0, 255, 255), 1) # Yellow (Visual)
+
+        car_w, car_h = ax2 - ax1, ay2 - ay1
+        car_h_shrink = (car_w * CAR_H_FORGIVENESS) / 2
+        car_v_shrink = (car_h * CAR_V_FORGIVENESS) / 2
+        core_ax1 = int(ax1 + car_h_shrink)
+        core_ay1 = int(ay1 + car_v_shrink)
+        core_ax2 = int(ax2 - car_h_shrink)
+        core_ay2 = int(ay2 - car_v_shrink)
+        cv2.rectangle(frame, (core_ax1, core_ay1), (core_ax2, core_ay2), (0, 255, 0), 2) # Green (Core)
+
+        # --- Obstacle Hitboxes ---
+        for obs in self.obstacles:
+            bx1, by1, bx2, by2 = map(int, obs.rect)
+            cv2.rectangle(frame, (bx1, by1), (bx2, by2), (0, 0, 255), 1) # Red (Visual)
+
+            obs_w, obs_h = bx2 - bx1, by2 - by1
+            obs_h_shrink = (obs_w * OBS_H_FORGIVENESS) / 2
+            obs_v_shrink = (obs_h * OBS_V_FORGIVENESS) / 2
+            core_bx1 = int(bx1 + obs_h_shrink)
+            core_by1 = int(by1 + obs_v_shrink)
+            core_bx2 = int(bx2 - obs_h_shrink)
+            core_by2 = int(by2 - obs_v_shrink)
+            cv2.rectangle(frame, (core_bx1, core_by1), (core_bx2, core_by2), (0, 255, 0), 2) # Green (Core)
 
     def draw(self, frame):
         h, w = frame.shape[:2]
@@ -780,6 +798,10 @@ class Game:
             effect.draw(frame)
 
         self.car.draw(frame)
+
+        # --- Draw Hitboxes if in Debug Mode ---
+        if self.debug_mode:
+            self._draw_debug_hitboxes(frame)
 
         for i in range(self.lives):
             cv2.circle(frame, (w - 50 - i * 40, 50), 15, (0, 0, 255), -1)
@@ -837,8 +859,7 @@ class Game:
         self.spawn_interval = SPAWN_INTERVAL
         
         self.obstacle_speed = INITIAL_OBSTACLE_SPEED
-        global Game_speed
-        Game_speed = INITIAL_OBSTACLE_SPEED
+        # REMOVED: No longer need to set global variable
         
         self.pattern_active = False
         self.pattern_name = None
@@ -857,71 +878,56 @@ class Game:
 
         self.t_last_heart_spawn = t
         self.game_over = False
+        self.last_spawn_was_truck = False
 
     @staticmethod
-    def _calculate_forgiveness_threshold(base_forgiveness_factor, extra_factor_increment, item_width, center_dist_ratio):
-        threshold_percentage = base_forgiveness_factor
-        if center_dist_ratio > 0.4:
-            threshold_percentage += extra_factor_increment
-        return item_width * threshold_percentage
+    def _intersect(car_rect, obs_rect, forgive_tail=True):
+        """
+        Definitive intersection method using symmetrical, centered core hitboxes.
+        Both car and obstacle hitboxes are shrunk equally from the top and bottom.
+        """
+        ax1, ay1, ax2, ay2 = car_rect
+        bx1, by1, bx2, by2 = obs_rect
 
-    @staticmethod
-    def _check_side_forgiveness(intersection_width, car_width, center_dist_ratio):
-        side_thresh = Game._calculate_forgiveness_threshold(COLLISION_FORGIVENESS, 0.15, car_width, center_dist_ratio)
-        return intersection_width < side_thresh
+        # 1. Broad-phase check: If visual boxes don't overlap, no collision.
+        if ax2 <= bx1 or ax1 >= bx2 or ay2 <= by1 or ay1 >= by2:
+            return False
 
-    @staticmethod
-    def _check_tail_forgiveness(ay1, by1, obstacle_height, intersection_width, car_width, center_dist_ratio):
-        if ay1 > (by1 + obstacle_height * TWO_THIRDS):
-            tail_thresh = Game._calculate_forgiveness_threshold(EXTRA_FORGIVENESS, 0.10, car_width, center_dist_ratio)
-            return intersection_width < tail_thresh
-        return False
+        # For non-forgiving items (coins, hearts), a simple visual overlap is enough.
+        if not forgive_tail:
+            return True
 
-    @staticmethod
-    def _intersect(a, b, forgive_tail=True):
-        ax1, ay1, ax2, ay2 = a
-        bx1, by1, bx2, by2 = b
+        # 2. Define Symmetrical Core Hitboxes
+        car_w, car_h = ax2 - ax1, ay2 - ay1
+        obs_w, obs_h = bx2 - bx1, by2 - by1
 
-        if ax2 <= bx1 or ax1 >= bx2 or ay2 <= by1 or ay1 >= by2: return False
+        # Shrink car hitbox from all sides
+        car_h_shrink = (car_w * CAR_H_FORGIVENESS) / 2
+        car_v_shrink = (car_h * CAR_V_FORGIVENESS) / 2 # Shrink from top AND bottom
+        core_ax1 = ax1 + car_h_shrink
+        core_ay1 = ay1 + car_v_shrink
+        core_ax2 = ax2 - car_h_shrink
+        core_ay2 = ay2 - car_v_shrink
 
-        overlap_x1 = max(ax1, bx1)
-        overlap_y1 = max(ay1, by1)
-        overlap_x2 = min(ax2, bx2)
-        overlap_y2 = min(ay2, by2)
+        # Shrink obstacle hitbox from all sides
+        obs_h_shrink = (obs_w * OBS_H_FORGIVENESS) / 2
+        obs_v_shrink = (obs_h * OBS_V_FORGIVENESS) / 2 # Shrink from top AND bottom
+        core_bx1 = bx1 + obs_h_shrink
+        core_by1 = by1 + obs_v_shrink
+        core_bx2 = bx2 - obs_h_shrink
+        core_by2 = by2 - obs_v_shrink
 
-        if overlap_x2 <= overlap_x1 or overlap_y2 <= overlap_y1: return False
+        # 3. Final check: A collision only occurs if the core hitboxes intersect.
+        if (core_ax2 <= core_bx1 or core_ax1 >= core_bx2 or
+            core_ay2 <= core_by1 or core_ay1 >= core_by2):
+            return False  # No collision between core hitboxes.
 
-        intersection_width = overlap_x2 - overlap_x1
-        car_width = ax2 - ax1
-        
-        if car_width <= 0: return True
-
-        if forgive_tail:
-            obstacle_width = bx2 - bx1
-            obstacle_height = by2 - by1
-            if obstacle_height <= 0 or obstacle_width <= 0: return True
-
-            car_center_x = (ax1 + ax2) / 2
-            obs_center_x = (bx1 + bx2) / 2
-            
-            center_dist_denominator = (car_width / 2 + obstacle_width / 2)
-            center_dist_ratio = 0.0
-            if center_dist_denominator > 0:
-                center_dist_ratio = abs(car_center_x - obs_center_x) / center_dist_denominator
-            
-            if Game._check_side_forgiveness(intersection_width, car_width, center_dist_ratio):
-                return False
-
-            if Game._check_tail_forgiveness(ay1, by1, obstacle_height, intersection_width, car_width, center_dist_ratio):
-                return False
-        
         return True
-
-
 
     def _is_lane_safe(self, y_pos, lane):
         is_safe_from_obstacles = self.is_position_safe(y_pos, lane, self.obstacles)
         is_safe_from_collectibles = self.is_position_safe(y_pos, lane, self.coins + self.hearts)
         return is_safe_from_obstacles and is_safe_from_collectibles
+
 
  
