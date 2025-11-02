@@ -10,7 +10,7 @@ SPEED_INCREMENT = 20        # Speed increase per blink
 SPAWN_INTERVAL = 2.0        # Initial time between obstacle spawns
 
 # --- Collectibles & Player Stats ---
-COIN_INTERVAL = 3.0
+COIN_INTERVAL = 0.8         # Reduced from 3.0 for more coins
 HEART_INTERVAL = 12.0
 MAX_LIVES = 3
 
@@ -34,46 +34,56 @@ CAR_H_FORGIVENESS = 0.25
 OBS_H_FORGIVENESS = 0.25
 
 # --- Game Modes ---
-PATTERN_DURATION = 30
-BONUS_DURATION = 10
+PATTERN_DURATION = 20 # Each pattern will last 20 seconds
+# REMOVED: BONUS_DURATION = 10
+PATTERN_COOLDOWN_S = 3.0 # 3-second relaxation buffer between patterns
 
 
 OBSTACLE_PATTERNS = {
     "zigzag": [
-        [0, 0, 0, 1],
-        [0, 0, 1, 0],
-        [0, 1, 0, 0],
-        [1, 0, 0, 0],
-        [0, 1, 0, 0],
-        [0, 0, 1, 0],
+        [0, 0, 1],
+        [0, 0, 0],
+        [0, 1, 0],
+        [0, 0, 0],
+        [1, 0, 0],
+        [0, 0, 0],
+        [0, 1, 0],
+        [0, 0, 0],
     ],
     "wall_gap": [
-        [1, 1, 0, 1],
-        [0, 0, 0, 0],
-        [0, 0, 0, 0],
-        [1, 0, 1, 1],
-        [0, 0, 0, 0],
-        [0, 0, 0, 0],
+        [1, 1, 0],
+        [0, 0, 0],
+        [0, 0, 0],
+        [0, 1, 1],
+        [0, 0, 0],
+        [0, 0, 0],
+        [1, 0, 1],
     ],
     "alternating": [
-        [1, 0, 1, 0],
-        [0, 0, 0, 0],
-        [0, 1, 0, 1],
-        [0, 0, 0, 0],
+        [1, 0, 1],
+        [0, 0, 0],
+        [0, 0, 0],
+        [0, 1, 0],
+        [0, 0, 0],
+        [0, 0, 0],
     ],
     "funnel": [
-        [1, 0, 0, 1],
-        [0, 0, 0, 0],
-        [0, 1, 1, 0],
-        [0, 0, 0, 0],
+        [1, 0, 1],
+        [0, 0, 0],
+        [0, 0, 0],
+        [0, 1, 0],
+        [0, 0, 0],
+        [0, 0, 0],
     ],
     "spiral": [
-        [1, 0, 0, 0],
-        [0, 1, 0, 0],
-        [0, 0, 1, 0],
-        [0, 0, 0, 1],
-        [0, 0, 1, 0],
-        [0, 1, 0, 0],
+        [1, 0, 0],
+        [0, 0, 0],
+        [0, 1, 0],
+        [0, 0, 0],
+        [0, 0, 1],
+        [0, 0, 0],
+        [0, 1, 0],
+        [0, 0, 0],
     ]
 }
 
@@ -300,15 +310,22 @@ class Game:
 
         self.debug_mode = True # SET TO TRUE TO SEE HITBOXES
 
-        self.pattern_active = False
+        # --- NEW: Pattern-cycling engine state ---
+        self.pattern_list = list(OBSTACLE_PATTERNS.keys())
+        self.pattern_queue = []
         self.pattern_name = None
         self.pattern_step = 0
         self.pattern_spawn_timer = 0
-        self.pattern_start_score = 0
+        self.pattern_active = False
+        self.pattern_end_time = 0
+        self.pattern_cooldown_active = True # Start in cooldown
+        self.pattern_cooldown_end_time = time.time() + 3.0 # Initial 3s buffer
         
-        self.bonus_active = False
-        self.bonus_start_time = 0
-        self.original_spawn_interval = self.spawn_interval
+        # REMOVED: All old pattern/bonus attributes
+        # self.pattern_start_score = 0
+        # self.bonus_active = False
+        # self.bonus_start_time = 0
+        # self.original_spawn_interval = self.spawn_interval
 
         base = os.path.dirname(__file__)
         imgdir = os.path.join(base, "images")
@@ -353,237 +370,71 @@ class Game:
         self.scroll_speed = 4.0
 
         self.obstacle_speed = INITIAL_OBSTACLE_SPEED
-        # REMOVED: No longer need to set global variable
+        
+        self._load_next_pattern() # Prepare the first pattern
 
     def on_blink(self):
         old_interval = self.spawn_interval
         old_speed = self.obstacle_speed
         
         self.spawn_interval = max(0.5, self.spawn_interval * 0.9)
-        self.obstacle_speed += SPEED_INCREMENT # REMOVED: Speed cap is gone.
+        self.obstacle_speed += SPEED_INCREMENT
         
         print(f">>> Blink! Interval: {old_interval:.2f}s→{self.spawn_interval:.2f}s, Speed: {old_speed}→{self.obstacle_speed}")
 
-    def is_position_safe(self, y_pos, lane_to_check, item_list):
-        for item in item_list:
-            if item.lane == lane_to_check and abs(item.y - y_pos) < MIN_VERTICAL_GAP:
-                return False
-        return True
+    # --- REMOVED: All old spawning logic ---
+    # The methods _should_start_pattern, _start_pattern_mode, _start_bonus_stretch,
+    # _spawn_bonus_collectibles, _update_bonus_stretch, _spawn_obstacle, and all of
+    # its helper functions have been removed.
 
-    def _should_start_pattern(self):
-        if self.pattern_active or self.bonus_active:
-            return False
-            
-        # Check for bonus mode at multiples of 70
-        if self.score > 0 and self.score % 70 == 0:
-            return "bonus"
-            
-        # Check for pattern mode (25-35 range in each 50-point cycle, starting from score 25)
-        if self.score >= 25:
-            # Calculate position within the 70-point cycle
-            cycle_position = (self.score - 25) % 70
-            
-            # Pattern mode occurs at positions 0-10 within each 70-point cycle
-            # (which corresponds to scores 25-35, 95-105, 165-175, etc.)
-            if 0 <= cycle_position <= 10:
-                # Only start pattern at the beginning of the range
-                if cycle_position == 0:
-                    return "pattern"
-                
-        return False
-
-    def _start_pattern_mode(self):
-        self.pattern_active = True
+    # --- NEW: Pattern-cycling engine ---
+    def _load_next_pattern(self):
+        """Loads the next pattern from the queue and sets its duration."""
+        if not self.pattern_queue:
+            self.pattern_queue = self.pattern_list[:]
+            random.shuffle(self.pattern_queue)
+        
+        self.pattern_name = self.pattern_queue.pop(0)
         self.pattern_step = 0
-        self.pattern_spawn_timer = 0
-        self.pattern_start_score = self.score
-        
-        patterns = list(OBSTACLE_PATTERNS.keys())
-        pattern_index = (self.score // 25) % len(patterns)
-        self.pattern_name = patterns[pattern_index]
-        
-        print(f">>> Starting pattern '{self.pattern_name}' at score {self.score}")
-
-    def _start_bonus_stretch(self):
-        self.bonus_active = True
-        self.bonus_start_time = time.time()
-        self.original_spawn_interval = self.spawn_interval
-        self.spawn_interval = 3.0
-        
-        print(f">>> Starting bonus stretch at score {self.score}")
-        
-        self._spawn_bonus_collectibles()
-
-    def _spawn_bonus_collectibles(self):
-        for lane in range(self.lane_count):
-            if self.coin_sprite is not None:
-                coin = CoinItem(self.lane_count, self.coin_sprite)
-                coin.lane = lane
-                coin.y = SPAWN_Y - (lane * 100)
-                self.coins.append(coin)
-            
-            if lane % 2 == 0 and self.heart_sprite is not None:
-                heart = HeartItem(self.lane_count, self.heart_sprite)
-                heart.lane = lane
-                heart.y = SPAWN_Y - (lane * 100) - 50
-                self.hearts.append(heart)
+        self.pattern_active = True
+        self.pattern_cooldown_active = False
+        self.pattern_end_time = time.time() + PATTERN_DURATION
+        print(f">>> Starting pattern '{self.pattern_name}' for {PATTERN_DURATION}s")
 
     def _update_pattern_mode(self, now):
+        """The primary obstacle spawner, driven by patterns, duration, and cooldowns."""
+        if self.pattern_cooldown_active:
+            if now > self.pattern_cooldown_end_time:
+                self._load_next_pattern()
+            return
+
+        if self.pattern_active and now > self.pattern_end_time:
+            print(f">>> Pattern '{self.pattern_name}' finished. Starting {PATTERN_COOLDOWN_S}s cooldown.")
+            self.pattern_active = False
+            self.pattern_cooldown_active = True
+            self.pattern_cooldown_end_time = now + PATTERN_COOLDOWN_S
+            return
+
         if not self.pattern_active:
             return
             
-        if self.score >= self.pattern_start_score + PATTERN_DURATION:
-            self.pattern_active = False
-            self.pattern_name = None
-            print(f">>> Pattern ended at score {self.score}")
-            return
-            
-        pattern = OBSTACLE_PATTERNS[self.pattern_name]
-        
+        pattern_data = OBSTACLE_PATTERNS[self.pattern_name]
+        if self.pattern_step >= len(pattern_data):
+            self.pattern_step = 0
+
         if now - self.pattern_spawn_timer > 0.8:
-            current_pattern = pattern[self.pattern_step % len(pattern)]
+            current_row = pattern_data[self.pattern_step]
             
-            for lane_idx, should_spawn in enumerate(current_pattern):
+            for lane_idx, should_spawn in enumerate(current_row):
                 if should_spawn and lane_idx < self.lane_count and self.car_sprites:
-                    # Patterns will only spawn regular cars for consistency
                     sprite = random.choice(self.car_sprites)
                     new_obstacle = Obstacle(self.lane_count, sprite)
                     new_obstacle.lane = lane_idx
-                    new_obstacle.y = SPAWN_Y - (len([l for l in current_pattern[:lane_idx] if l]) * 80)
+                    new_obstacle.y = SPAWN_Y
                     self.obstacles.append(new_obstacle)
             
             self.pattern_step += 1
             self.pattern_spawn_timer = now
-
-    def _update_bonus_stretch(self, now):
-        if not self.bonus_active:
-            return
-            
-        if now - self.bonus_start_time > BONUS_DURATION:
-            self.bonus_active = False
-            self.spawn_interval = self.original_spawn_interval
-            print(f">>> Bonus stretch ended at score {self.score}")
-            return
-            
-        # Continue spawning bonus collectibles during bonus time
-        if now - self.t_last_coin_spawn > 2.0:
-            self._spawn_bonus_collectibles()
-            self.t_last_coin_spawn = now
-
-    def _spawn_obstacle(self, now):
-        if self.pattern_active or self.bonus_active:
-            return
-            
-        if not self._can_spawn_obstacle(now):
-            return
-
-        lookahead_distance = self.obstacle_speed * OBSTACLE_SPAWN_LOOKAHEAD_SECONDS
-        avg_lane_width = (self.boundaries[1] - self.boundaries[0])
-        avg_obs_visual_height = OBS_SCALE * avg_lane_width * 1.7
-
-        candidate_lanes = self._evaluate_candidate_lanes(lookahead_distance, avg_obs_visual_height)
-        chosen_lane = self._choose_spawn_lane(candidate_lanes)
-
-        if chosen_lane != -1:
-            self._create_and_spawn_obstacle(chosen_lane, now)
-
-    def _can_spawn_obstacle(self, now):
-        if not (self.car_sprites or self.truck_sprites) or now - self.t_last_obs_spawn < self.spawn_interval:
-            return False
-        
-        return (self.boundaries and len(self.boundaries) > 1 and self.boundaries[1] > self.boundaries[0])
-
-    def _evaluate_candidate_lanes(self, lookahead_distance, avg_obs_visual_height):
-        candidate_lanes = []
-        
-        for lane_idx in range(self.lane_count):
-            if not self._is_lane_basically_safe(lane_idx):
-                continue
-                
-            safety_score = self._calculate_lane_safety_score(lane_idx, lookahead_distance, avg_obs_visual_height)
-            if safety_score > 0:
-                candidate_lanes.append((lane_idx, safety_score))
-        
-        return candidate_lanes
-
-    def _is_lane_basically_safe(self, lane_idx):
-        return (self.is_position_safe(SPAWN_Y, lane_idx, self.obstacles) and 
-                self.is_position_safe(SPAWN_Y, lane_idx, self.coins + self.hearts))
-
-    def _calculate_lane_safety_score(self, lane_idx, lookahead_distance, avg_obs_visual_height):
-        occupied_lanes = self._get_occupied_critical_lanes(lookahead_distance, avg_obs_visual_height)
-        potential_lanes_occupied = list(occupied_lanes)
-        potential_lanes_occupied[lane_idx] = True
-        
-        if all(potential_lanes_occupied):
-            return 0
-        
-        safety_score = self._calculate_base_safety_score(potential_lanes_occupied)
-        safety_score += self._calculate_adjacency_bonus(lane_idx, occupied_lanes)
-        
-        return safety_score
-
-    def _get_occupied_critical_lanes(self, lookahead_distance, avg_obs_visual_height):
-        occupied_lanes = [False] * self.lane_count
-        
-        for obs in self.obstacles:
-            if self._is_obstacle_critical(obs, lookahead_distance, avg_obs_visual_height):
-                if 0 <= obs.lane < self.lane_count:
-                    occupied_lanes[obs.lane] = True
-        
-        return occupied_lanes
-
-    def _is_obstacle_critical(self, obs, lookahead_distance, avg_obs_visual_height):
-        min_y = SPAWN_Y - avg_obs_visual_height * 0.75
-        max_y = SPAWN_Y + lookahead_distance
-        return min_y < obs.y < max_y
-
-    def _calculate_base_safety_score(self, potential_lanes_occupied):
-        blocked_count = sum(1 for occupied in potential_lanes_occupied if occupied)
-        return (self.lane_count - blocked_count) * 2
-
-    def _calculate_adjacency_bonus(self, lane_idx, occupied_lanes):
-        if self.lane_count <= 1:
-            return 0
-        
-        is_adjacent = self._is_adjacent_to_occupied_lane(lane_idx, occupied_lanes)
-        return 0 if is_adjacent else 1
-
-    def _is_adjacent_to_occupied_lane(self, lane_idx, occupied_lanes):
-        if lane_idx > 0 and occupied_lanes[lane_idx - 1]:
-            return True
-        if lane_idx < self.lane_count - 1 and occupied_lanes[lane_idx + 1]:
-            return True
-        return False
-
-    def _choose_spawn_lane(self, candidate_lanes):
-        if not candidate_lanes:
-            return -1 # CRITICAL FIX: If no safe lane is found, do not spawn.
-
-        # The rest of the logic is fine, it picks the best from the safe candidates.
-        candidate_lanes.sort(key=lambda x: x[1], reverse=True)
-        best_score = candidate_lanes[0][1]
-        top_tier_lanes = [lane_idx for lane_idx, score in candidate_lanes if score == best_score]
-        return random.choice(top_tier_lanes)
-
-    def _create_and_spawn_obstacle(self, chosen_lane, now):
-        sprite = None
-        # --- NEW: Logic for spawning rare trucks ---
-        # Trucks have a ~20% chance to spawn, but not if the last obstacle was also a truck.
-        is_truck_spawn = random.random() < 0.20 and not self.last_spawn_was_truck
-
-        if is_truck_spawn and self.truck_sprites:
-            sprite = random.choice(self.truck_sprites)
-            self.last_spawn_was_truck = True
-        elif self.car_sprites:
-            sprite = random.choice(self.car_sprites)
-            self.last_spawn_was_truck = False
-
-        if sprite is not None:
-            new_obstacle = Obstacle(self.lane_count, sprite)
-            new_obstacle.lane = chosen_lane
-            self.obstacles.append(new_obstacle)
-            self.t_last_obs_spawn = now
     
     def _spawn_coin(self, now):
         if self.coin_sprite is None or now - self.t_last_coin_spawn < self.coin_interval:
@@ -663,22 +514,13 @@ class Game:
     def _spawn_all_items(self):
         now = time.time()
         if self.boundaries and self.boundaries[1] > 0:
-            mode_check = self._should_start_pattern()
-            if mode_check == "pattern":
-                self._start_pattern_mode()
-            elif mode_check == "bonus":
-                self._start_bonus_stretch()
-            
+            # Obstacles are now handled exclusively by the pattern engine
             self._update_pattern_mode(now)
-            self._update_bonus_stretch(now)
             
-            self._spawn_obstacle(now)
-            
-            if not self.bonus_active:
+            # FIX: Only spawn collectibles during the relaxation buffer
+            if self.pattern_cooldown_active:
                 self._spawn_coin(now)
                 self._spawn_heart(now)
-            
-            # self._spawn_freeze(now) # Removed
 
     def _process_obstacles(self, dt, fh):
         for obs in self.obstacles[:]:
@@ -809,19 +651,19 @@ class Game:
         cv2.putText(frame, f"SCORE: {self.score}", (10, 40), cv2.FONT_HERSHEY_SIMPLEX, 1, (255, 255, 255), 2, cv2.LINE_AA)
         cv2.putText(frame, f"COINS: {self.coin_count}", (w - 200, 40), cv2.FONT_HERSHEY_SIMPLEX, 1, (255, 255, 255), 2, cv2.LINE_AA)
 
-        if self.pattern_active:
-            cv2.putText(frame, f"PATTERN: {self.pattern_name.upper()}", (10, h - 40),
-                       cv2.FONT_HERSHEY_SIMPLEX, 0.8, (255, 255, 0), 2, cv2.LINE_AA)
-        elif self.bonus_active:
-            remaining = max(0, BONUS_DURATION - (time.time() - self.bonus_start_time))
-            cv2.putText(frame, f"BONUS TIME! {remaining:.0f}s", (10, h - 40),
-                       cv2.FONT_HERSHEY_SIMPLEX, 0.8, (0, 255, 0), 2, cv2.LINE_AA)
+        # --- NEW: Pattern text is now part of debug mode ---
+        if self.debug_mode:
+            if self.pattern_active:
+                cv2.putText(frame, f"PATTERN: {self.pattern_name.upper()}", (10, h - 40),
+                           cv2.FONT_HERSHEY_SIMPLEX, 0.8, (255, 255, 0), 2, cv2.LINE_AA)
+            elif self.pattern_cooldown_active and not self.game_over:
+                remaining = max(0, self.pattern_cooldown_end_time - time.time())
+                cv2.putText(frame, f"COOLDOWN... {remaining:.0f}s", (10, h - 40),
+                           cv2.FONT_HERSHEY_SIMPLEX, 0.8, (0, 255, 255), 2, cv2.LINE_AA)
 
     def draw_intro(self, frame):
         h, w = frame.shape[:2]
-        dark_overlay = frame.copy()
-        cv2.rectangle(dark_overlay, (0,0), (w,h), (0,0,0), -1)
-        cv2.addWeighted(dark_overlay, 0.7, frame, 0.3, 0, frame)
+        cv2.addWeighted(frame, 0.3, np.zeros_like(frame), 0.7, 0, frame)
 
         cv2.putText(frame, "BLINK 'N DRIFT", (w // 2 - 230, h // 2 - 80),
                     cv2.FONT_HERSHEY_SIMPLEX, 2, (0, 255, 255), 6, cv2.LINE_AA)
@@ -859,18 +701,14 @@ class Game:
         self.spawn_interval = SPAWN_INTERVAL
         
         self.obstacle_speed = INITIAL_OBSTACLE_SPEED
-        # REMOVED: No longer need to set global variable
         
+        # --- NEW: Reset pattern engine to start with a cooldown ---
         self.pattern_active = False
         self.pattern_name = None
         self.pattern_step = 0
-        self.pattern_spawn_timer = 0
-        self.pattern_start_score = 0
-        
-        self.bonus_active = False
-        self.bonus_start_time = 0
-        self.spawn_interval = SPAWN_INTERVAL
-        self.original_spawn_interval = SPAWN_INTERVAL
+        self.pattern_end_time = 0
+        self.pattern_cooldown_active = True
+        self.pattern_cooldown_end_time = time.time() + PATTERN_COOLDOWN_S
         
         t = time.time()
         self.t_last_obs_spawn = t 
@@ -924,10 +762,16 @@ class Game:
 
         return True
 
+    def is_position_safe(self, y_pos, lane_to_check, item_list, vertical_gap):
+        """Checks if a given lane is clear of items in a list within a vertical gap."""
+        for item in item_list:
+            if item.lane == lane_to_check and abs(item.y - y_pos) < vertical_gap:
+                return False
+        return True
+
     def _is_lane_safe(self, y_pos, lane):
-        is_safe_from_obstacles = self.is_position_safe(y_pos, lane, self.obstacles)
-        is_safe_from_collectibles = self.is_position_safe(y_pos, lane, self.coins + self.hearts)
+        is_safe_from_obstacles = self.is_position_safe(y_pos, lane, self.obstacles, MIN_VERTICAL_GAP)
+        is_safe_from_collectibles = self.is_position_safe(y_pos, lane, self.coins + self.hearts, MIN_VERTICAL_GAP)
         return is_safe_from_obstacles and is_safe_from_collectibles
 
 
- 
